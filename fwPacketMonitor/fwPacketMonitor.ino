@@ -1,6 +1,6 @@
 /*
   FarmWhisper RF Monitor Tool
-  Version: 0.1.1-monitor-test
+  Version: 0.1.2-monitor-test
 
   Target hardware:
     - RAK4631 Core
@@ -17,6 +17,10 @@
     - Passive receive-only LoRa P2P monitor
     - Prints packets to USB serial
     - Shows last packet summary on OLED
+
+  Battery:
+    - Reads battery voltage from WB_A0
+    - Displays x.xxv in the top right corner
 
   Purpose:
     This is a bench/survey/monitor tool, not a full FarmWhisper app.
@@ -49,6 +53,28 @@
 Adafruit_SH1106G display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
 
 bool displayOk = false;
+
+// -----------------------------------------------------------------------------
+// Battery voltage configuration
+//
+// RAK4631 / WisBlock examples read battery voltage through WB_A0.
+// Formula is based on RAK's RAK4630 battery read example:
+//   3.0V ADC range / 4096 counts = 0.73242188 mV per LSB
+//   multiply by board voltage-divider compensation.
+// -----------------------------------------------------------------------------
+
+#ifdef WB_A0
+#define PIN_VBAT WB_A0
+#else
+#define PIN_VBAT A0
+#endif
+
+#define VBAT_MV_PER_LSB       (0.73242188F)
+#define VBAT_DIVIDER_COMP     (1.73F)
+#define REAL_VBAT_MV_PER_LSB  (VBAT_DIVIDER_COMP * VBAT_MV_PER_LSB)
+
+float batteryVolts = 0.0F;
+uint32_t lastBatteryReadMs = 0;
 
 // -----------------------------------------------------------------------------
 // Radio configuration
@@ -137,13 +163,79 @@ void serialBegin()
   Serial.println();
   Serial.println("========================================");
   Serial.println(" FarmWhisper RF Monitor Tool");
-  Serial.println(" Version: 0.1.1-monitor-test");
+  Serial.println(" Version: 0.1.2-monitor-test");
   Serial.println(" Board  : RAK4631 / RAK19003");
   Serial.println(" Radio  : SX1262 passive RX");
   Serial.println(" OLED   : SH1106G on Wire @ 0x3C");
   Serial.println(" Gauge  : SNR -50..0..+30 dB");
+  Serial.println(" Battery: WB_A0");
   Serial.println("========================================");
   Serial.println();
+}
+
+// -----------------------------------------------------------------------------
+// Battery helpers
+// -----------------------------------------------------------------------------
+
+void batteryBegin()
+{
+  // RAK4631/nRF52: set ADC to internal 3.0V reference and 12-bit resolution.
+  analogReference(AR_INTERNAL_3_0);
+  analogReadResolution(12);
+  delay(5);
+
+  // Throw away first sample after ADC setup.
+  analogRead(PIN_VBAT);
+  delay(1);
+
+  lastBatteryReadMs = 0;
+}
+
+float readBatteryVolts()
+{
+  const uint8_t sampleCount = 8;
+  uint32_t sum = 0;
+
+  for (uint8_t i = 0; i < sampleCount; i++)
+  {
+    sum += analogRead(PIN_VBAT);
+    delay(1);
+  }
+
+  float rawAverage = (float)sum / (float)sampleCount;
+  float millivolts = rawAverage * REAL_VBAT_MV_PER_LSB;
+
+  return millivolts / 1000.0F;
+}
+
+void updateBatteryVoltage(bool force)
+{
+  if (!force && millis() - lastBatteryReadMs < 5000)
+  {
+    return;
+  }
+
+  lastBatteryReadMs = millis();
+  batteryVolts = readBatteryVolts();
+
+  Serial.print("[BAT] ");
+  Serial.print(batteryVolts, 2);
+  Serial.println("v");
+}
+
+void drawBatteryTopRight()
+{
+  if (!displayOk)
+  {
+    return;
+  }
+
+  // "x.xxv" is 5 characters. At text size 1, that is about 30 pixels wide.
+  display.setTextColor(SH110X_WHITE);
+  display.setTextSize(1);
+  display.setCursor(98, 0);
+  display.print(batteryVolts, 2);
+  display.print("v");
 }
 
 // -----------------------------------------------------------------------------
@@ -169,6 +261,9 @@ void displayBegin()
   display.setCursor(0, 0);
 
   display.println("FarmWhisper");
+  drawBatteryTopRight();
+
+  display.setCursor(0, 10);
   display.println("RF Monitor");
   display.println();
   display.println("OLED OK");
@@ -192,6 +287,9 @@ void drawBootStatus(const char *line)
   display.setCursor(0, 0);
 
   display.println("FarmWhisper");
+  drawBatteryTopRight();
+
+  display.setCursor(0, 10);
   display.println("RF Monitor");
   display.println();
 
@@ -265,7 +363,9 @@ void drawMonitorScreen()
   display.print("FW MON ");
   display.print(radioOk ? "RX" : "NO RADIO");
   display.print(" #");
-  display.println(rxCount);
+  display.print(rxCount);
+
+  drawBatteryTopRight();
 
   display.setCursor(0, 10);
   display.print("RSSI ");
@@ -320,6 +420,9 @@ void drawIdleScreen()
   display.setCursor(0, 0);
 
   display.println("FW RF MONITOR");
+  drawBatteryTopRight();
+
+  display.setCursor(0, 10);
   display.println("Listening...");
   display.println();
 
@@ -435,6 +538,10 @@ void printPacket()
 
   Serial.print(" snr=");
   Serial.print(packetSnr);
+
+  Serial.print(" batt=");
+  Serial.print(batteryVolts, 2);
+  Serial.print("v");
 
   Serial.print(" uptime=");
   Serial.print(millis() / 1000);
@@ -560,6 +667,9 @@ void setup()
 
   serialBegin();
 
+  batteryBegin();
+  updateBatteryVoltage(true);
+
   displayBegin();
   drawBootStatus("Booting...");
 
@@ -577,6 +687,8 @@ void setup()
 void loop()
 {
   Radio.IrqProcess();
+
+  updateBatteryVoltage(false);
 
   if (packetPending)
   {
@@ -624,7 +736,10 @@ void loop()
     Serial.print("s rx=");
     Serial.print(rxCount);
     Serial.print(" err=");
-    Serial.println(rxErrorCount);
+    Serial.print(rxErrorCount);
+    Serial.print(" batt=");
+    Serial.print(batteryVolts, 2);
+    Serial.println("v");
 
     if (rxCount == 0)
     {
