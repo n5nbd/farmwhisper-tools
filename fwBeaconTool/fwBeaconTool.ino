@@ -76,7 +76,7 @@ static const size_t crcLength = 2;
 // Beacon behavior
 // -----------------------------------------------------------------------------
 
-static const unsigned long beaconIntervalMs = 5000UL;
+static const unsigned long beaconIntervalMs = 15000UL;
 
 uint16_t sequenceNumber = 1;
 unsigned long lastBeaconMs = 0;
@@ -292,7 +292,7 @@ void transmitBeacon()
   snprintf(
     payloadText,
     sizeof(payloadText),
-    "name=FWBEACON bat=%.2fv up=%lu",
+    "name=COOP bat=%.2fv up=%lu",
     batteryVolts,
     millis() / 1000UL
   );
