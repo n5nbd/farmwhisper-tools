@@ -6,9 +6,9 @@ This is a practical field scanner, not a true spectrum analyzer. It sweeps a sho
 
 ## Version
 
-`0.1.4-display-layer-fix`
+`0.1.7-rssi-line`
 
-This version keeps the long-term accumulated survey scoring, but fixes the OLED graph draw order so the current RSSI sample is visible over the cumulative terrain.
+This version keeps the long-term accumulated survey scoring and changes the current RSSI display from a filled white bar to a 3-pixel-thick white level line, so the grey terrain can remain visible while the survey is still young.
 
 ## Target hardware
 
@@ -32,7 +32,7 @@ Use the same RAK4631 board setup already used for the working FarmWhisper monito
 ## What the screen means
 
 - The stippled/grey terrain is the long-term cumulative score by slot.
-- The solid white bars are the latest RSSI samples by slot, drawn over the grey terrain.
+- The 3-pixel-thick narrow white current-RSSI bars are the latest RSSI samples by slot, drawn over the grey terrain without covering the whole column.
   - RSSI raises it.
   - CAD hits raise it.
   - Decoded packet hits raise it.
@@ -64,20 +64,20 @@ Those lines can be captured later for mapping or comparison between locations.
 
 Copy the `fwSiteScanner` folder into your Arduino sketch directory, open `fwSiteScanner.ino`, compile, and upload to the RAK4631.
 
-## Display draw order in 0.1.4
+## Display draw order in 0.1.5
 
 The graph is drawn in this order:
 
 1. Clear the screen.
 2. Draw cumulative long-term score as stippled/grey terrain.
-3. Draw latest RSSI sample bars in solid white over the terrain.
+3. Draw latest RSSI sample levels as 3-pixel-thick white horizontal markers over the terrain.
 4. Draw the bottom sweep marker under the current channel.
 5. Draw the vertical best-slot marker last.
 
-That keeps the current sample visible while still showing the long-term valleys.
+That keeps the current sample visible without hiding the long-term valleys.
 
 
-## Version 0.1.4 display cleanup
+## Version 0.1.5 display cleanup
 
 - Bottom status line now starts with the current frequency.
 - Removed the `Now` label and activity-percent field so the line fits the 128x64 OLED.
@@ -85,3 +85,25 @@ That keeps the current sample visible while still showing the long-term valleys.
   - `H` = cumulative CAD-or-packet activity hits for the current slot.
   - `S` = long-term samples for the current slot.
 - Channel bars are now spread across the full graph width so the final slot gets drawn instead of leaving unused pixels at the right edge.
+
+
+## 0.1.5 update
+
+The grey/stipple terrain is now a real accumulated ugliness layer, not the
+long-term RSSI average. Repeated CAD hits, decoded packets, busy-RSSI scans,
+and meaningfully elevated RSSI add points to the terrain. The narrow white current-RSSI bars remain
+the latest RSSI sample and are drawn over the terrain. The best-slot vertical
+marker and Best text still use the long-term scoring algorithm.
+
+
+## 0.1.7 update
+
+The current RSSI sample is no longer drawn as a filled white bar. It is now a
+3-pixel-thick horizontal white marker at the current RSSI level. This leaves the
+stippled accumulated-ugliness terrain visible during the early part of a survey,
+so the RF dirt map can be seen growing behind the current readings.
+
+
+## 0.1.7 note
+
+The current RSSI display is now a narrow centered vertical white bar inside each frequency band, leaving the cumulative stippled terrain visible on both sides.

@@ -1,6 +1,6 @@
 /*
   FarmWhisper Site Scanner
-  Version: 0.1.4-display-cleanup
+  Version: 0.1.7-narrow-rssi-bars
 
   Target hardware:
     - RAK4631 Core
@@ -24,8 +24,8 @@
     quietest slot seen across the long-term survey run.
 
     Display behavior:
-      - Stippled grey terrain shows long-term cumulative ugliness.
-      - Solid white bars are drawn over the terrain to show latest RSSI.
+      - Stippled grey terrain shows accumulated ugliness points.
+      - A 3-pixel-wide centered white vertical bar shows the latest RSSI level for each slot.
       - A bottom sweep marker shows the current scan slot.
       - A vertical center line marks the current best slot.
       - Text reports frequency, RSSI, activity hits, and samples.
@@ -122,9 +122,16 @@ static const uint8_t rssiSampleDelayMs = 20;
 static const uint16_t cadWaitMs = 120;
 static const int16_t busyRssiThresholdDbm = -95;
 
-// Display scale for bar graph.
+// Display scale for latest-RSSI white level markers.
 static const int16_t rssiScaleMinDbm = -130;
 static const int16_t rssiScaleMaxDbm = -70;
+
+// Display scale for the grey/stipple terrain.
+// The terrain is intentionally not just long average RSSI. It is accumulated
+// ugliness: repeated CAD, packet, busy, and elevated-RSSI events slowly build
+// visible mass. This scale should not fill instantly; about an hour-long survey
+// should still leave visible differences between slots.
+static const uint32_t terrainFullScalePoints = 240;
 
 // Simple scoring. Lower score is better.
 // RSSI already trends lower when the slot is quiet.
@@ -160,6 +167,12 @@ struct SlotStats {
   uint32_t packetHits;
   uint32_t packetScanHits;
   uint32_t busyHits;
+
+  // Display terrain accumulator. Higher means that slot has repeatedly shown
+  // RF ugliness over time. It is separate from longScore because longScore is
+  // used for picking the best slot, while uglyPoints is used to draw the grey
+  // RF-terrain history.
+  uint32_t uglyPoints;
 };
 
 SlotStats slotStats[scanSlotCount];
@@ -192,7 +205,7 @@ void serialBegin() {
   Serial.println();
   Serial.println("========================================");
   Serial.println(" FarmWhisper Site Scanner");
-  Serial.println(" Version: 0.1.4-display-cleanup");
+  Serial.println(" Version: 0.1.7-narrow-rssi-bars");
   Serial.println(" Board : RAK4631 / RAK19003");
   Serial.println(" Radio : SX1262 LoRa slot scanner");
   Serial.println(" OLED  : SH1106G on Wire @ 0x3C");
@@ -270,6 +283,7 @@ void resetStats() {
     slotStats[i].packetHits = 0;
     slotStats[i].packetScanHits = 0;
     slotStats[i].busyHits = 0;
+    slotStats[i].uglyPoints = 0;
   }
 }
 
@@ -342,6 +356,48 @@ int graphHeightFromValue(int16_t value, int graphH) {
   return map(scaled, rssiScaleMinDbm, rssiScaleMaxDbm, 1, graphH);
 }
 
+int graphHeightFromUglyPoints(uint32_t uglyPoints, int graphH) {
+  if (uglyPoints == 0) {
+    return 0;
+  }
+
+  if (uglyPoints >= terrainFullScalePoints) {
+    return graphH;
+  }
+
+  int h = (int)((uglyPoints * (uint32_t)graphH) / terrainFullScalePoints);
+  if (h < 1) {
+    h = 1;
+  }
+  return h;
+}
+
+uint16_t uglyPointsForScan(int16_t rssiAvgDbm, bool cadDetected, uint16_t packetCount, bool busyDetected) {
+  uint16_t points = 0;
+
+  // RSSI contributes only when it is meaningfully above the quiet floor.
+  // This prevents every normal quiet scan from immediately painting the
+  // whole display grey, while still letting noisier slots slowly rise.
+  int16_t rssiAboveFloor = rssiAvgDbm - rssiScaleMinDbm;
+  if (rssiAboveFloor > 8) {
+    points += (uint16_t)((rssiAboveFloor - 8) / 4);
+  }
+
+  if (cadDetected) {
+    points += 8;
+  }
+
+  if (packetCount > 0) {
+    points += 12;
+  }
+
+  if (busyDetected) {
+    points += 10;
+  }
+
+  return points;
+}
+
 void drawDitheredRect(int x, int y, int w, int h) {
   if (w <= 0 || h <= 0) {
     return;
@@ -406,15 +462,15 @@ void drawScannerScreen() {
     }
 
     if (slotStats[i].longSamples > 0) {
-      int terrainH = graphHeightFromValue(slotStats[i].longScore, graphH);
+      int terrainH = graphHeightFromUglyPoints(slotStats[i].uglyPoints, graphH);
       int terrainY = graphY + graphH - terrainH;
       drawDitheredRect(x, terrainY, barW, terrainH);
     }
   }
 
-  // Second layer: latest RSSI samples, drawn solid white over the terrain so
-  // the current/recent RF activity remains visible even when the history layer
-  // is already tall.
+  // Second layer: latest RSSI samples, drawn as narrow centered vertical
+  // white bars. The full-width stippled terrain remains visible on both sides
+  // of each current-RSSI bar while still showing the current signal height.
   for (uint8_t i = 0; i < scanSlotCount; i++) {
     int x = graphX + ((int)i * graphW) / scanSlotCount;
     int nextX = graphX + ((int)(i + 1) * graphW) / scanSlotCount;
@@ -423,18 +479,41 @@ void drawScannerScreen() {
       barW = 2;
     }
 
+    int centerX = x + (barW / 2);
+    int markerW = 3;
+    int markerX = centerX - 1;
+
+    if (markerX < x) {
+      markerX = x;
+    }
+    if (markerX + markerW > x + barW) {
+      markerX = x + barW - markerW;
+    }
+    if (markerX < x) {
+      markerX = x;
+      markerW = barW;
+    }
+
     if (slotStats[i].samples == 0) {
-      display.drawRect(x, baselineY - 1, barW, 1, SH110X_WHITE);
+      display.drawFastVLine(centerX, baselineY - 2, 2, SH110X_WHITE);
     } else {
       int currentBarH = graphHeightFromValue(slotStats[i].rssiAvgDbm, graphH);
       int currentY = graphY + graphH - currentBarH;
-      display.fillRect(x, currentY, barW, currentBarH, SH110X_WHITE);
+
+      if (currentY < graphY) {
+        currentY = graphY;
+      }
+      if (currentY > baselineY - 1) {
+        currentY = baselineY - 1;
+      }
+
+      display.fillRect(markerX, currentY, markerW, baselineY - currentY, SH110X_WHITE);
     }
 
     // Activity dot stays near the top of the graph area. It is still useful
     // for spotting LoRa-like activity even when a packet was not decoded.
     if (slotStats[i].cadHits > 0 || slotStats[i].packetScanHits > 0) {
-      display.drawPixel(x + (barW / 2), graphY - 1, SH110X_WHITE);
+      display.drawPixel(centerX, graphY - 1, SH110X_WHITE);
     }
   }
 
@@ -811,6 +890,8 @@ void scanOneSlot(uint8_t slot) {
     s.busyHits++;
   }
 
+  s.uglyPoints += uglyPointsForScan(s.rssiAvgDbm, cadDetected, slotPacketCount, busyDetected);
+
   s.score = s.rssiAvgDbm;
   if (cadDetected) {
     s.score += cadPenaltyDb;
@@ -849,7 +930,7 @@ void setup() {
   printCsvHeader();
 
   Serial.println();
-  Serial.println("[SCANNER] Running. White bars draw over grey terrain; bottom tick marks current slot; vertical line marks best slot.");
+  Serial.println("[SCANNER] Running. White RSSI level lines draw over accumulated grey terrain; bottom tick marks current slot; vertical line marks best slot.");
   Serial.println("[SCANNER] Let it run at one site for a while; power-cycle or press R in Serial Monitor to reset.");
   Serial.println("[SCANNER] Rotate the tool, move it around, and compare relative readings.");
   Serial.println();
