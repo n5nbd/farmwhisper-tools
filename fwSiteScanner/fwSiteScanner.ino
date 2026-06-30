@@ -1,6 +1,6 @@
 /*
   FarmWhisper Site Scanner
-  Version: 0.1.1-long-average
+  Version: 0.1.2-terrain-display
 
   Target hardware:
     - RAK4631 Core
@@ -22,6 +22,12 @@
     It sweeps a short list of 902-923 MHz slots, samples RSSI, runs a
     LoRa CAD check, watches for decodable packets, and recommends the
     quietest slot seen across the long-term survey run.
+
+    Display behavior:
+      - Solid white bars show the latest RSSI sample.
+      - Stippled grey terrain shows long-term cumulative ugliness.
+      - A vertical center line marks the current best slot.
+      - Text still reports the actual recommended frequency.
 
   Required libraries:
     - Adafruit GFX Library
@@ -143,7 +149,7 @@ struct SlotStats {
   uint16_t packets;
 
   // Long-term survey result. These accumulate until reset or power cycle.
-  // The outlined "best" slot is selected from these values.
+  // The best-slot marker is selected from these values.
   int32_t rssiLongSumDbm;
   int16_t rssiLongAvgDbm;
   int16_t longScore;
@@ -185,7 +191,7 @@ void serialBegin() {
   Serial.println();
   Serial.println("========================================");
   Serial.println(" FarmWhisper Site Scanner");
-  Serial.println(" Version: 0.1.1-long-average");
+  Serial.println(" Version: 0.1.2-terrain-display");
   Serial.println(" Board : RAK4631 / RAK19003");
   Serial.println(" Radio : SX1262 LoRa slot scanner");
   Serial.println(" OLED  : SH1106G on Wire @ 0x3C");
@@ -330,6 +336,27 @@ void drawBootStatus(const char *line) {
   display.display();
 }
 
+int graphHeightFromValue(int16_t value, int graphH) {
+  int16_t scaled = clampRssi(value);
+  return map(scaled, rssiScaleMinDbm, rssiScaleMaxDbm, 1, graphH);
+}
+
+void drawDitheredRect(int x, int y, int w, int h) {
+  if (w <= 0 || h <= 0) {
+    return;
+  }
+
+  // The SH1106G is monochrome, so "grey" is a checkerboard/stipple.
+  // This is drawn over the white RSSI bar so long-term ugliness looks like
+  // a cumulative grey terrain layer instead of a second solid white bar.
+  for (int py = y; py < y + h; py++) {
+    for (int px = x; px < x + w; px++) {
+      uint16_t color = ((px + py) & 0x01) ? SH110X_WHITE : SH110X_BLACK;
+      display.drawPixel(px, py, color);
+    }
+  }
+}
+
 void drawScannerScreen() {
   if (!displayOk) {
     return;
@@ -360,8 +387,6 @@ void drawScannerScreen() {
   const int graphH = 29;
   const int slotW = graphW / scanSlotCount;
 
-  display.drawLine(graphX, graphY + graphH, graphX + graphW - 1, graphY + graphH, SH110X_WHITE);
-
   for (uint8_t i = 0; i < scanSlotCount; i++) {
     int x = graphX + i * slotW;
     int barW = slotW - 1;
@@ -369,18 +394,23 @@ void drawScannerScreen() {
       barW = 2;
     }
 
-    int16_t scaled = clampRssi(slotStats[i].rssiLongAvgDbm);
-    int barH = map(scaled, rssiScaleMinDbm, rssiScaleMaxDbm, 1, graphH);
-    int y = graphY + graphH - barH;
+    // Solid bar: latest RSSI sample. It keeps the display lively and makes
+    // short events, like your beacon, easy to spot.
+    int currentBarH = graphHeightFromValue(slotStats[i].rssiAvgDbm, graphH);
+    int currentY = graphY + graphH - currentBarH;
 
-    if (slotStats[i].longSamples == 0) {
+    if (slotStats[i].samples == 0) {
       display.drawRect(x, graphY + graphH - 1, barW, 1, SH110X_WHITE);
     } else {
-      display.fillRect(x, y, barW, barH, SH110X_WHITE);
+      display.fillRect(x, currentY, barW, currentBarH, SH110X_WHITE);
     }
 
-    if (i == bestSlot) {
-      display.drawRect(x, graphY - 2, barW, graphH + 3, SH110X_WHITE);
+    // Stipple/grey terrain: long-term score, including RSSI, CAD hits,
+    // packet hits, and busy samples. Repeated hits lift this grey mass.
+    if (slotStats[i].longSamples > 0) {
+      int terrainH = graphHeightFromValue(slotStats[i].longScore, graphH);
+      int terrainY = graphY + graphH - terrainH;
+      drawDitheredRect(x, terrainY, barW, terrainH);
     }
 
     if (i == currentSlot) {
@@ -391,6 +421,13 @@ void drawScannerScreen() {
       display.drawPixel(x + (barW / 2), graphY - 1, SH110X_WHITE);
     }
   }
+
+  display.drawLine(graphX, graphY + graphH, graphX + graphW - 1, graphY + graphH, SH110X_WHITE);
+
+  // Best slot marker: one centered vertical line, not a box. The numeric
+  // recommendation is still the text line above the graph.
+  int bestX = graphX + bestSlot * slotW + (slotW / 2);
+  display.drawFastVLine(bestX, graphY - 3, graphH + 4, SH110X_WHITE);
 
   display.setCursor(0, 55);
   display.print("Now ");
@@ -784,7 +821,7 @@ void setup() {
   printCsvHeader();
 
   Serial.println();
-  Serial.println("[SCANNER] Running. Outline marks long-term lowest score, not magic truth.");
+  Serial.println("[SCANNER] Running. Vertical line marks long-term lowest score; grey terrain shows cumulative ugliness.");
   Serial.println("[SCANNER] Let it run at one site for a while; power-cycle or press R in Serial Monitor to reset.");
   Serial.println("[SCANNER] Rotate the tool, move it around, and compare relative readings.");
   Serial.println();

@@ -2,13 +2,13 @@
 
 Standalone RAK4631 / RAK19003 survey firmware.
 
-This is a practical field scanner, not a true spectrum analyzer. It sweeps a short set of 902-923 MHz LoRa slots, samples RSSI, runs LoRa CAD, counts decodable packet hits, shows a bar graph on the SH1106G OLED, and prints CSV-style scan data to USB serial.
+This is a practical field scanner, not a true spectrum analyzer. It sweeps a short set of 902-923 MHz LoRa slots, samples RSSI, runs LoRa CAD, counts decodable packet hits, shows a terrain-style channel view on the SH1106G OLED, and prints CSV-style scan data to USB serial.
 
 ## Version
 
-`0.1.1-long-average`
+`0.1.2-terrain-display`
 
-This version uses long-term accumulated survey statistics for the recommended slot. The display still shows the latest RSSI sample for the currently scanned slot, but the outlined slot is selected from the accumulated average and activity rates since the last reset or power cycle.
+This version keeps the long-term accumulated survey scoring from `0.1.1`, but changes the OLED graph so the recommendation is easier to read at a glance.
 
 ## Target hardware
 
@@ -31,11 +31,16 @@ Use the same RAK4631 board setup already used for the working FarmWhisper monito
 
 ## What the screen means
 
-- The bars are long-term relative RSSI/noise by slot. Taller bars are louder/noisier.
-- The outline marks the current long-term lowest-scoring slot.
-- `Best` shows the recommended frequency, long-term RSSI average, and sample count.
+- The solid white bars are the latest RSSI samples by slot.
+- The stippled/grey terrain is the long-term cumulative score by slot.
+  - RSSI raises it.
+  - CAD hits raise it.
+  - Decoded packet hits raise it.
+  - Busy-RSSI readings raise it.
+- The single vertical line marks the current long-term best slot.
+- `Best` still shows the actual recommended frequency, long-term RSSI average, and sample count.
 - `Now` shows the slot being scanned right now, the latest RSSI sample, the long sample count for that slot, and a simple accumulated activity percentage.
-- A slot is penalized by CAD hits, decoded packet hits, and busy RSSI readings.
+- Shoot for the valleys. A low grey/stippled valley is usually a better FarmWhisper candidate than a tall grey hill.
 - This is for choosing a relatively quiet FarmWhisper channel, not for FCC-grade measurement.
 
 ## Letting it settle
