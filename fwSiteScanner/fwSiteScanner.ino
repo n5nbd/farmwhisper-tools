@@ -1,6 +1,6 @@
 /*
   FarmWhisper Site Scanner
-  Version: 0.1.2-terrain-display
+  Version: 0.1.4-display-cleanup
 
   Target hardware:
     - RAK4631 Core
@@ -24,10 +24,11 @@
     quietest slot seen across the long-term survey run.
 
     Display behavior:
-      - Solid white bars show the latest RSSI sample.
       - Stippled grey terrain shows long-term cumulative ugliness.
+      - Solid white bars are drawn over the terrain to show latest RSSI.
+      - A bottom sweep marker shows the current scan slot.
       - A vertical center line marks the current best slot.
-      - Text still reports the actual recommended frequency.
+      - Text reports frequency, RSSI, activity hits, and samples.
 
   Required libraries:
     - Adafruit GFX Library
@@ -191,7 +192,7 @@ void serialBegin() {
   Serial.println();
   Serial.println("========================================");
   Serial.println(" FarmWhisper Site Scanner");
-  Serial.println(" Version: 0.1.2-terrain-display");
+  Serial.println(" Version: 0.1.4-display-cleanup");
   Serial.println(" Board : RAK4631 / RAK19003");
   Serial.println(" Radio : SX1262 LoRa slot scanner");
   Serial.println(" OLED  : SH1106G on Wire @ 0x3C");
@@ -347,12 +348,14 @@ void drawDitheredRect(int x, int y, int w, int h) {
   }
 
   // The SH1106G is monochrome, so "grey" is a checkerboard/stipple.
-  // This is drawn over the white RSSI bar so long-term ugliness looks like
-  // a cumulative grey terrain layer instead of a second solid white bar.
+  // This is the long-term terrain layer and is drawn first. We only draw
+  // the white pixels in the pattern; the display was cleared before this,
+  // and the current RSSI bars are drawn solid white over the top afterward.
   for (int py = y; py < y + h; py++) {
     for (int px = x; px < x + w; px++) {
-      uint16_t color = ((px + py) & 0x01) ? SH110X_WHITE : SH110X_BLACK;
-      display.drawPixel(px, py, color);
+      if (((px + py) & 0x01) == 0) {
+        display.drawPixel(px, py, SH110X_WHITE);
+      }
     }
   }
 }
@@ -386,59 +389,84 @@ void drawScannerScreen() {
   const int graphW = 128;
   const int graphH = 29;
   const int slotW = graphW / scanSlotCount;
+  const int baselineY = graphY + graphH;
 
+  // First layer: long-term cumulative terrain. This is the stippled/grey
+  // history layer. Repeated CAD, packet, busy, or elevated RSSI results lift
+  // this mass over time. It must be drawn before the white sample bars.
   for (uint8_t i = 0; i < scanSlotCount; i++) {
-    int x = graphX + i * slotW;
-    int barW = slotW - 1;
+    // Spread the channel columns across the whole graph width. Integer division
+    // with a fixed slotW left unused pixels on the right side, which made the
+    // last channel look like it was never being written.
+    int x = graphX + ((int)i * graphW) / scanSlotCount;
+    int nextX = graphX + ((int)(i + 1) * graphW) / scanSlotCount;
+    int barW = nextX - x - 1;
     if (barW < 2) {
       barW = 2;
     }
 
-    // Solid bar: latest RSSI sample. It keeps the display lively and makes
-    // short events, like your beacon, easy to spot.
-    int currentBarH = graphHeightFromValue(slotStats[i].rssiAvgDbm, graphH);
-    int currentY = graphY + graphH - currentBarH;
-
-    if (slotStats[i].samples == 0) {
-      display.drawRect(x, graphY + graphH - 1, barW, 1, SH110X_WHITE);
-    } else {
-      display.fillRect(x, currentY, barW, currentBarH, SH110X_WHITE);
-    }
-
-    // Stipple/grey terrain: long-term score, including RSSI, CAD hits,
-    // packet hits, and busy samples. Repeated hits lift this grey mass.
     if (slotStats[i].longSamples > 0) {
       int terrainH = graphHeightFromValue(slotStats[i].longScore, graphH);
       int terrainY = graphY + graphH - terrainH;
       drawDitheredRect(x, terrainY, barW, terrainH);
     }
+  }
 
-    if (i == currentSlot) {
-      display.drawLine(x, graphY - 4, x + barW - 1, graphY - 4, SH110X_WHITE);
+  // Second layer: latest RSSI samples, drawn solid white over the terrain so
+  // the current/recent RF activity remains visible even when the history layer
+  // is already tall.
+  for (uint8_t i = 0; i < scanSlotCount; i++) {
+    int x = graphX + ((int)i * graphW) / scanSlotCount;
+    int nextX = graphX + ((int)(i + 1) * graphW) / scanSlotCount;
+    int barW = nextX - x - 1;
+    if (barW < 2) {
+      barW = 2;
     }
 
+    if (slotStats[i].samples == 0) {
+      display.drawRect(x, baselineY - 1, barW, 1, SH110X_WHITE);
+    } else {
+      int currentBarH = graphHeightFromValue(slotStats[i].rssiAvgDbm, graphH);
+      int currentY = graphY + graphH - currentBarH;
+      display.fillRect(x, currentY, barW, currentBarH, SH110X_WHITE);
+    }
+
+    // Activity dot stays near the top of the graph area. It is still useful
+    // for spotting LoRa-like activity even when a packet was not decoded.
     if (slotStats[i].cadHits > 0 || slotStats[i].packetScanHits > 0) {
       display.drawPixel(x + (barW / 2), graphY - 1, SH110X_WHITE);
     }
   }
 
-  display.drawLine(graphX, graphY + graphH, graphX + graphW - 1, graphY + graphH, SH110X_WHITE);
+  display.drawLine(graphX, baselineY, graphX + graphW - 1, baselineY, SH110X_WHITE);
 
-  // Best slot marker: one centered vertical line, not a box. The numeric
-  // recommendation is still the text line above the graph.
-  int bestX = graphX + bestSlot * slotW + (slotW / 2);
-  display.drawFastVLine(bestX, graphY - 3, graphH + 4, SH110X_WHITE);
+  // Sweep indicator: bottom tick under the channel being scanned now. This
+  // keeps the top of the graph clean and stops it from looking like another
+  // signal/activity marker.
+  int currentX = graphX + ((int)currentSlot * graphW) / scanSlotCount;
+  int currentNextX = graphX + ((int)(currentSlot + 1) * graphW) / scanSlotCount;
+  int currentBarW = currentNextX - currentX - 1;
+  if (currentBarW < 2) {
+    currentBarW = 2;
+  }
+  display.drawLine(currentX, baselineY + 2, currentX + currentBarW - 1, baselineY + 2, SH110X_WHITE);
+
+  // Best slot marker: centered vertical line, drawn last so it is visible
+  // over both the grey terrain and the white RSSI bar. The numeric frequency
+  // remains in the Best text line.
+  int bestX = graphX + ((int)bestSlot * graphW) / scanSlotCount;
+  int bestNextX = graphX + ((int)(bestSlot + 1) * graphW) / scanSlotCount;
+  bestX += (bestNextX - bestX) / 2;
+  display.drawFastVLine(bestX, graphY, graphH, SH110X_WHITE);
 
   display.setCursor(0, 55);
-  display.print("Now ");
   display.print(freqMHz(scanFrequenciesHz[currentSlot]), 1);
   display.print(" ");
   display.print(current.rssiAvgDbm);
+  display.print(" H");
+  display.print(current.cadHits + current.packetScanHits);
   display.print(" S");
   display.print(current.longSamples);
-  display.print(" A");
-  display.print(hitPercent(current.cadHits + current.packetScanHits, current.scans));
-  display.print("%");
 
   display.display();
 }
@@ -821,7 +849,7 @@ void setup() {
   printCsvHeader();
 
   Serial.println();
-  Serial.println("[SCANNER] Running. Vertical line marks long-term lowest score; grey terrain shows cumulative ugliness.");
+  Serial.println("[SCANNER] Running. White bars draw over grey terrain; bottom tick marks current slot; vertical line marks best slot.");
   Serial.println("[SCANNER] Let it run at one site for a while; power-cycle or press R in Serial Monitor to reset.");
   Serial.println("[SCANNER] Rotate the tool, move it around, and compare relative readings.");
   Serial.println();

@@ -6,9 +6,9 @@ This is a practical field scanner, not a true spectrum analyzer. It sweeps a sho
 
 ## Version
 
-`0.1.2-terrain-display`
+`0.1.4-display-layer-fix`
 
-This version keeps the long-term accumulated survey scoring from `0.1.1`, but changes the OLED graph so the recommendation is easier to read at a glance.
+This version keeps the long-term accumulated survey scoring, but fixes the OLED graph draw order so the current RSSI sample is visible over the cumulative terrain.
 
 ## Target hardware
 
@@ -31,12 +31,13 @@ Use the same RAK4631 board setup already used for the working FarmWhisper monito
 
 ## What the screen means
 
-- The solid white bars are the latest RSSI samples by slot.
 - The stippled/grey terrain is the long-term cumulative score by slot.
+- The solid white bars are the latest RSSI samples by slot, drawn over the grey terrain.
   - RSSI raises it.
   - CAD hits raise it.
   - Decoded packet hits raise it.
   - Busy-RSSI readings raise it.
+- The bottom tick marks the slot being scanned right now.
 - The single vertical line marks the current long-term best slot.
 - `Best` still shows the actual recommended frequency, long-term RSSI average, and sample count.
 - `Now` shows the slot being scanned right now, the latest RSSI sample, the long sample count for that slot, and a simple accumulated activity percentage.
@@ -62,3 +63,25 @@ Those lines can be captured later for mapping or comparison between locations.
 ## Install
 
 Copy the `fwSiteScanner` folder into your Arduino sketch directory, open `fwSiteScanner.ino`, compile, and upload to the RAK4631.
+
+## Display draw order in 0.1.4
+
+The graph is drawn in this order:
+
+1. Clear the screen.
+2. Draw cumulative long-term score as stippled/grey terrain.
+3. Draw latest RSSI sample bars in solid white over the terrain.
+4. Draw the bottom sweep marker under the current channel.
+5. Draw the vertical best-slot marker last.
+
+That keeps the current sample visible while still showing the long-term valleys.
+
+
+## Version 0.1.4 display cleanup
+
+- Bottom status line now starts with the current frequency.
+- Removed the `Now` label and activity-percent field so the line fits the 128x64 OLED.
+- Bottom status line is now: `freq rssi H# S#`.
+  - `H` = cumulative CAD-or-packet activity hits for the current slot.
+  - `S` = long-term samples for the current slot.
+- Channel bars are now spread across the full graph width so the final slot gets drawn instead of leaving unused pixels at the right edge.
