@@ -1,6 +1,6 @@
-/*
+ /*
   FarmWhisper Site Scanner
-  Version: 0.1.7-narrow-rssi-bars
+  Version: 0.1.9-scan-complete
 
   Target hardware:
     - RAK4631 Core
@@ -95,6 +95,7 @@ uint32_t lastBatteryReadMs = 0;
 #define LORA_IQ_INVERSION_ON false
 #define RX_TIMEOUT_VALUE 0
 
+// First-pass FarmWhisper survey slots.
 // Kept to 902-923 MHz for a conservative RAK4631(H) first test.
 // Add/remove slots later once we decide what the production channel plan is.
 static const uint32_t scanFrequenciesHz[] = {
@@ -180,6 +181,7 @@ uint8_t currentSlot = 0;
 uint8_t bestSlot = 0;
 uint32_t sweepCount = 0;
 uint32_t scanCount = 0;
+bool scanComplete = false;
 
 volatile bool scannerListening = false;
 volatile bool cadDoneFlag = false;
@@ -204,7 +206,7 @@ void serialBegin() {
   Serial.println();
   Serial.println("========================================");
   Serial.println(" FarmWhisper Site Scanner");
-  Serial.println(" Version: 0.1.7-narrow-rssi-bars");
+  Serial.println(" Version: 0.1.9-scan-complete");
   Serial.println(" Board : RAK4631 / RAK19003");
   Serial.println(" Radio : SX1262 LoRa slot scanner");
   Serial.println(" OLED  : SH1106G on Wire @ 0x3C");
@@ -319,7 +321,7 @@ void displayBegin() {
   display.println("fwSiteScanner");
   drawBatteryTopRight();
   display.setCursor(0, 10);
-  display.println("v0.1.8");
+  display.println("v0.1.9");
   display.println();
   display.println("OLED OK");
   display.display();
@@ -370,6 +372,15 @@ int graphHeightFromUglyPoints(uint32_t uglyPoints, int graphH) {
     h = 1;
   }
   return h;
+}
+
+bool anyTerrainFull() {
+  for (uint8_t i = 0; i < scanSlotCount; i++) {
+    if (slotStats[i].uglyPoints >= terrainFullScalePoints) {
+      return true;
+    }
+  }
+  return false;
 }
 
 uint16_t uglyPointsForScan(int16_t rssiAvgDbm, bool cadDetected, uint16_t packetCount, bool busyDetected) {
@@ -438,7 +449,6 @@ void drawScannerScreen() {
   display.print(" MHz ");
   display.print(best.rssiLongAvgDbm);
   display.print("db");
-  //display.print(best.longSamples);
 
   const int graphX = 0;
   const int graphY = 20;
@@ -539,13 +549,17 @@ void drawScannerScreen() {
   display.drawFastVLine(bestX, graphY, graphH, SH110X_WHITE);
 
   display.setCursor(0, 55);
-  display.print(freqMHz(scanFrequenciesHz[currentSlot]), 1);
-  display.print(" ");
-  display.print(current.rssiAvgDbm);
-  display.print(" P");
-  display.print(current.cadHits + current.packetScanHits);
-  display.print(" #");
-  display.print(current.longSamples);
+  if (scanComplete) {
+    display.print("Scan Complete!");
+  } else {
+    display.print(freqMHz(scanFrequenciesHz[currentSlot]), 1);
+    display.print(" ");
+    display.print(current.rssiAvgDbm);
+    display.print(" P");
+    display.print(current.cadHits + current.packetScanHits);
+    display.print(" #");
+    display.print(current.longSamples);
+  }
 
   display.display();
 }
@@ -721,6 +735,7 @@ void handleSerialCommands() {
     char c = Serial.read();
 
     if (c == 'r' || c == 'R') {
+      scanComplete = false;
       resetStats();
       currentSlot = 0;
       bestSlot = 0;
@@ -891,6 +906,13 @@ void scanOneSlot(uint8_t slot) {
   }
 
   s.uglyPoints += uglyPointsForScan(s.rssiAvgDbm, cadDetected, slotPacketCount, busyDetected);
+  if (s.uglyPoints >= terrainFullScalePoints) {
+    s.uglyPoints = terrainFullScalePoints;
+    if (!scanComplete) {
+      scanComplete = true;
+      Serial.println("[SCANNER] Scan Complete!");
+    }
+  }
 
   s.score = s.rssiAvgDbm;
   if (cadDetected) {
@@ -930,8 +952,8 @@ void setup() {
   printCsvHeader();
 
   Serial.println();
-  Serial.println("[SCANNER] Running. White RSSI level lines draw over accumulated grey terrain; bottom tick marks current slot; vertical line marks best slot.");
-  Serial.println("[SCANNER] Let it run at one site for a while; power-cycle or press R in Serial Monitor to reset.");
+  Serial.println("[SCANNER] Running. Narrow white RSSI bars draw over accumulated grey terrain; bottom tick marks current slot; vertical line marks best slot.");
+  Serial.println("[SCANNER] Let it run until Scan Complete or long enough for the site; power-cycle or press R in Serial Monitor to reset.");
   Serial.println("[SCANNER] Rotate the tool, move it around, and compare relative readings.");
   Serial.println();
 }
@@ -940,6 +962,12 @@ void loop() {
   updateBatteryVoltage(false);
   handleSerialCommands();
 
+  if (scanComplete) {
+    Radio.Standby();
+    delay(1000);
+    return;
+  }
+
   if (!radioOk) {
     delay(1000);
     return;
@@ -947,6 +975,11 @@ void loop() {
 
   currentSlot = currentSlot % scanSlotCount;
   scanOneSlot(currentSlot);
+
+  if (scanComplete) {
+    Radio.Standby();
+    return;
+  }
 
 #ifdef LED_BUILTIN
   digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
