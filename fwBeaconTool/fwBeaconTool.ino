@@ -1,6 +1,6 @@
 /*
   FarmWhisper Beacon Tool
-  Version: 0.1.1
+  Version: 0.1.3
 
   Target hardware:
   - RAK4631 Core
@@ -117,14 +117,14 @@ static float activeBeaconFrequencyMHz()
 //   TX power:        14 dBm
 //
 
-static const uint32_t rfFrequencyHz = 915000000UL;
-static const uint8_t loraBandwidth = 0;
-static const uint8_t loraSpreadingFactor = 7;
-static const uint8_t loraCodingRate = 1;
-static const uint16_t loraPreambleLength = 8;
+static const uint32_t rfFrequencyHz = activeBeaconFrequencyHz();
+static const uint8_t loraBandwidth = fwSx126xBandwidthIndex();
+static const uint8_t loraSpreadingFactor = fwDefaultSpreadingFactor();
+static const uint8_t loraCodingRate = fwDefaultCodingRate();
+static const uint16_t loraPreambleLength = fwDefaultPreambleLength();
 static const bool loraFixedLengthPayload = false;
 static const bool loraIqInversion = false;
-static const int8_t txOutputPowerDbm = 14;
+static const int8_t txOutputPowerDbm = fwDefaultTxPowerDbm();
 static const uint32_t txTimeoutMs = 3000UL;
 
 // -----------------------------------------------------------------------------
@@ -325,6 +325,56 @@ void printBanner()
   Serial.println();
 }
 
+
+void printRadioConfig()
+{
+  Serial.println("[RADIO] Configured for LoRa P2P TX");
+  Serial.println("[RADIO] Plan      : shared/fwRadioInfo-US.h");
+
+  Serial.print("[RADIO] Channel   : ");
+  if (activeBeaconChannel() < 10)
+  {
+    Serial.print("0");
+  }
+  Serial.println(activeBeaconChannel());
+
+  Serial.print("[RADIO] Frequency : ");
+  Serial.println((uint32_t)rfFrequencyHz);
+
+  Serial.print("[RADIO] Freq MHz  : ");
+  Serial.println(activeBeaconFrequencyMHz(), 3);
+
+  Serial.print("[RADIO] BW Hz     : ");
+  Serial.println(fwDefaultBandwidthHz());
+
+  Serial.print("[RADIO] BW index  : ");
+  Serial.println(loraBandwidth);
+
+  Serial.print("[RADIO] SF        : ");
+  Serial.println(loraSpreadingFactor);
+
+  Serial.print("[RADIO] CR index  : ");
+  Serial.println(loraCodingRate);
+
+  Serial.print("[RADIO] Preamble  : ");
+  Serial.println(loraPreambleLength);
+
+  Serial.print("[RADIO] Sync word : 0x");
+  if (fwDefaultSyncWord() < 16)
+  {
+    Serial.print("0");
+  }
+  Serial.println(fwDefaultSyncWord(), HEX);
+
+  Serial.print("[RADIO] TX power  : ");
+  Serial.print(txOutputPowerDbm);
+  Serial.println(" dBm");
+
+  Serial.print("[RADIO] Interval  : ");
+  Serial.print(beaconIntervalMs);
+  Serial.println(" ms");
+}
+
 // -----------------------------------------------------------------------------
 // Radio setup
 // -----------------------------------------------------------------------------
@@ -361,7 +411,7 @@ void beginRadio()
     txTimeoutMs
   );
 
-  Serial.println("[INFO] Radio configured for LoRa P2P TX");
+  printRadioConfig();
 }
 
 // -----------------------------------------------------------------------------
