@@ -1,6 +1,6 @@
 /*
   FarmWhisper Site Scanner
-  Version: 0.1.12
+  Version: 0.1.13
 
   Target hardware:
   - RAK4631 Core
@@ -16,12 +16,13 @@
   - RAK4631 SX1262
   - LoRa P2P scan/survey tool
   - Uses SX126x-Arduino / SX126x-RAK4630 API, not generic RadioLib pin mapping
+  - Uses shared/fwRadioInfo-US.h for channel list and LoRa profile
 
   Purpose:
   This is a practical field survey tool, not a lab spectrum analyzer.
-  It sweeps a short list of 902-923 MHz slots, samples RSSI, runs a
-  LoRa CAD check, watches for decodable packets, and recommends the
-  quietest slot after one terrain bin reaches full-scale.
+  It scans the shared FarmWhisper US channel list, samples RSSI, runs a LoRa CAD
+  check, watches for decodable packets, and recommends the least-ugly channel
+  after one terrain bin reaches full-scale.
 
   Display behavior:
   - Stippled grey terrain shows accumulated ugliness points.
@@ -36,6 +37,16 @@
   - Adafruit GFX Library
   - Adafruit SH110X
   - SX126x-Arduino / SX126x-RAK4630 support
+
+  Build note:
+  This sketch prefers:
+    #include "fwRadioInfo-US.h"
+
+  That means Arduino CLI / VSCode should add the repo shared directory as an
+  include path:
+    -I/home/zim/Arduino/farmwhisper-tools/shared
+
+  The relative include fallback is kept for manual Arduino IDE use.
 */
 
 #include <Adafruit_TinyUSB.h>
@@ -45,7 +56,13 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SH110X.h>
 
-#include "fwChannelPlanUS.h"
+#if __has_include("fwRadioInfo-US.h")
+#include "fwRadioInfo-US.h"
+#elif __has_include("../shared/fwRadioInfo-US.h")
+#include "../shared/fwRadioInfo-US.h"
+#else
+#error "fwRadioInfo-US.h not found. Put it in shared/ and add shared to compiler include path."
+#endif
 
 // -----------------------------------------------------------------------------
 // Display configuration
@@ -77,29 +94,47 @@ uint32_t lastBatteryReadMs = 0;
 // -----------------------------------------------------------------------------
 // Radio configuration
 // -----------------------------------------------------------------------------
+
 // SX126x-Arduino bandwidth index:
-// 0 = 125 kHz
-// 1 = 250 kHz
-// 2 = 500 kHz
-#define LORA_BANDWIDTH 0
-#define LORA_SPREADING_FACTOR 7
+//   0 = 125 kHz
+//   1 = 250 kHz
+//   2 = 500 kHz
+//
+// shared/fwRadioInfo-US.h stores bandwidth in Hz so the shared radio plan reads
+// like actual RF engineering. This mapper converts it to the SX126x-Arduino API.
+
+static uint8_t fwSx126xBandwidthIndex()
+{
+    if (fwDefaultBandwidthHz() >= 500000UL) {
+        return 2;
+    }
+
+    if (fwDefaultBandwidthHz() >= 250000UL) {
+        return 1;
+    }
+
+    return 0;
+}
+
+#define LORA_BANDWIDTH fwSx126xBandwidthIndex()
+#define LORA_SPREADING_FACTOR fwDefaultSpreadingFactor()
 
 // SX126x-Arduino coding rate index:
-// 1 = 4/5
-// 2 = 4/6
-// 3 = 4/7
-// 4 = 4/8
-#define LORA_CODINGRATE 1
-#define LORA_PREAMBLE_LENGTH 8
+//   1 = 4/5
+//   2 = 4/6
+//   3 = 4/7
+//   4 = 4/8
+#define LORA_CODINGRATE fwDefaultCodingRate()
+#define LORA_PREAMBLE_LENGTH fwDefaultPreambleLength()
 #define LORA_SYMBOL_TIMEOUT 0
 #define LORA_FIX_LENGTH_PAYLOAD_ON false
 #define LORA_IQ_INVERSION_ON false
 #define RX_TIMEOUT_VALUE 0
 
-// FarmWhisper US channel plan.
-// The actual channel table lives in shared/fwChannelPlanUS.h so the scanner,
-// beacon, monitor, and product firmware all recommend the same user-facing
-// FarmWhisper channel numbers.
+// FarmWhisper US radio plan.
+// The channel list and LoRa profile live in shared/fwRadioInfo-US.h so scanner,
+// beacon, monitor, and product firmware all use the same user-facing channel
+// numbers and modem profile.
 static const uint8_t scanSlotCount = fwChannelCount;
 
 // Scan behavior.
@@ -178,8 +213,15 @@ volatile int8_t lastPacketSnr = 0;
 // -----------------------------------------------------------------------------
 // Small helpers
 // -----------------------------------------------------------------------------
-void serialBegin() {
+float freqMHz(uint32_t freqHz)
+{
+    return (float)freqHz / 1000000.0F;
+}
+
+void serialBegin()
+{
     Serial.begin(115200);
+
     uint32_t start = millis();
     while (!Serial && millis() - start < 2500) {
         delay(10);
@@ -188,29 +230,37 @@ void serialBegin() {
     Serial.println();
     Serial.println("========================================");
     Serial.println(" FarmWhisper Site Scanner");
-    Serial.println(" Version: 0.1.12");
+    Serial.println(" Version: 0.1.13");
     Serial.println(" Board : RAK4631 / RAK19003");
     Serial.println(" Radio : SX1262 LoRa slot scanner");
-    Serial.println(" OLED : SH1106G on Wire @ 0x3C");
-    Serial.println(" Scan : RSSI + CAD + packet hits");
+    Serial.println(" OLED  : SH1106G on Wire @ 0x3C");
+    Serial.println(" Plan  : shared/fwRadioInfo-US.h");
+    Serial.println(" Scan  : RSSI + CAD + packet hits");
+    Serial.println(" Best  : calculated after terrain bin fills");
     Serial.println("========================================");
     Serial.println();
 }
 
-void printCsvHeader() {
-    Serial.println("[CSV] ms,scan,sweep,slot,freqMHz,rssiAvgDbm,rssiMinDbm,rssiMaxDbm,samples,cad,packets,busy,score,longSamples,rssiLongAvgDbm,cadPct,packetPct,busyPct,longScore,bestChannel,bestSlot,bestFreqMHz,batteryVolts");
+void printCsvHeader()
+{
+    Serial.println("[CSV] ms,scan,sweep,slot,channel,freqMHz,rssiAvgDbm,rssiMinDbm,rssiMaxDbm,samples,cad,packets,busy,score,longSamples,rssiLongAvgDbm,cadPct,packetPct,busyPct,longScore,bestChannel,bestSlot,bestFreqMHz,batteryVolts");
 }
 
-void batteryBegin() {
+void batteryBegin()
+{
     analogReference(AR_INTERNAL_3_0);
     analogReadResolution(12);
     delay(5);
+
+    // Throw away first sample after ADC setup.
     analogRead(PIN_VBAT);
     delay(1);
+
     lastBatteryReadMs = 0;
 }
 
-float readBatteryVolts() {
+float readBatteryVolts()
+{
     const uint8_t sampleCount = 8;
     uint32_t sum = 0;
 
@@ -224,7 +274,8 @@ float readBatteryVolts() {
     return millivolts / 1000.0F;
 }
 
-void updateBatteryVoltage(bool force) {
+void updateBatteryVoltage(bool force)
+{
     if (!force && millis() - lastBatteryReadMs < 5000) {
         return;
     }
@@ -233,37 +284,43 @@ void updateBatteryVoltage(bool force) {
     batteryVolts = readBatteryVolts();
 }
 
-float freqMHz(uint32_t freqHz) {
-    return (float)freqHz / 1000000.0F;
-}
-
-void printChannelNumber(uint8_t index) {
+void printChannelNumber(uint8_t index)
+{
     uint8_t channel = fwIndexToChannel(index);
+
     if (channel < 10) {
         display.print("0");
     }
+
     display.print(channel);
 }
 
-void serialPrintChannelNumber(uint8_t index) {
+void serialPrintChannelNumber(uint8_t index)
+{
     uint8_t channel = fwIndexToChannel(index);
+
     if (channel < 10) {
         Serial.print("0");
     }
+
     Serial.print(channel);
 }
 
-int16_t clampRssi(int16_t rssi) {
+int16_t clampRssi(int16_t rssi)
+{
     if (rssi < rssiScaleMinDbm) {
         return rssiScaleMinDbm;
     }
+
     if (rssi > rssiScaleMaxDbm) {
         return rssiScaleMaxDbm;
     }
+
     return rssi;
 }
 
-void resetStats() {
+void resetStats()
+{
     currentSlot = 0;
     bestSlot = 0;
     sweepCount = 0;
@@ -277,6 +334,7 @@ void resetStats() {
         slotStats[i].score = 32767;
         slotStats[i].samples = 0;
         slotStats[i].packets = 0;
+
         slotStats[i].rssiLongSumDbm = 0;
         slotStats[i].rssiLongAvgDbm = rssiScaleMinDbm;
         slotStats[i].longScore = 32767;
@@ -296,7 +354,8 @@ void completeScanIfAnyBinFull();
 // -----------------------------------------------------------------------------
 // Display helpers
 // -----------------------------------------------------------------------------
-void drawBatteryTopRight() {
+void drawBatteryTopRight()
+{
     if (!displayOk) {
         return;
     }
@@ -308,7 +367,8 @@ void drawBatteryTopRight() {
     display.print("v");
 }
 
-void displayBegin() {
+void displayBegin()
+{
     Wire.begin();
     Wire.setClock(100000);
 
@@ -321,20 +381,24 @@ void displayBegin() {
     display.clearDisplay();
     display.setTextColor(SH110X_WHITE);
     display.setTextSize(1);
+
     display.setCursor(0, 0);
     display.println("fwSiteScanner");
     drawBatteryTopRight();
+
     display.setCursor(0, 10);
-    display.println("v0.1.12");
+    display.println("v0.1.13");
     display.println();
     display.println("OLED OK");
     display.display();
+
     delay(3000);
 
     Serial.println("[OLED] SH1106G initialized on Wire @ 0x3C");
 }
 
-void drawBootStatus(const char *line) {
+void drawBootStatus(const char *line)
+{
     if (!displayOk) {
         return;
     }
@@ -342,27 +406,36 @@ void drawBootStatus(const char *line) {
     display.clearDisplay();
     display.setTextColor(SH110X_WHITE);
     display.setTextSize(1);
+
     display.setCursor(0, 0);
     display.println("fwSiteScanner");
     drawBatteryTopRight();
+
     display.setCursor(0, 12);
     display.println(line);
     display.println();
+
     display.print("Slots: ");
     display.println(scanSlotCount);
+
     display.print("Mode : SF");
     display.print(LORA_SPREADING_FACTOR);
-    display.println(" BW125");
+    display.print(" BW");
+    display.print(fwDefaultBandwidthHz() / 1000UL);
+    display.println("k");
+
     display.display();
     delay(3000);
 }
 
-int graphHeightFromValue(int16_t value, int graphH) {
+int graphHeightFromValue(int16_t value, int graphH)
+{
     int16_t scaled = clampRssi(value);
     return map(scaled, rssiScaleMinDbm, rssiScaleMaxDbm, 1, graphH);
 }
 
-int graphHeightFromUglyPoints(uint32_t uglyPoints, int graphH) {
+int graphHeightFromUglyPoints(uint32_t uglyPoints, int graphH)
+{
     if (uglyPoints == 0) {
         return 0;
     }
@@ -372,6 +445,7 @@ int graphHeightFromUglyPoints(uint32_t uglyPoints, int graphH) {
     }
 
     int h = (int)((uglyPoints * (uint32_t)graphH) / terrainFullScalePoints);
+
     if (h < 1) {
         h = 1;
     }
@@ -379,7 +453,8 @@ int graphHeightFromUglyPoints(uint32_t uglyPoints, int graphH) {
     return h;
 }
 
-bool anyTerrainBinFull() {
+bool anyTerrainBinFull()
+{
     for (uint8_t i = 0; i < scanSlotCount; i++) {
         if (slotStats[i].uglyPoints >= terrainFullScalePoints) {
             return true;
@@ -389,13 +464,19 @@ bool anyTerrainBinFull() {
     return false;
 }
 
-uint16_t uglyPointsForScan(int16_t rssiAvgDbm, bool cadDetected, uint16_t packetCount, bool busyDetected) {
+uint16_t uglyPointsForScan(
+    int16_t rssiAvgDbm,
+    bool cadDetected,
+    uint16_t packetCount,
+    bool busyDetected)
+{
     uint16_t points = 0;
 
     // RSSI contributes only when it is meaningfully above the quiet floor.
     // This prevents every normal quiet scan from immediately painting the
     // whole display grey, while still letting noisier slots slowly rise.
     int16_t rssiAboveFloor = rssiAvgDbm - rssiScaleMinDbm;
+
     if (rssiAboveFloor > 8) {
         points += (uint16_t)((rssiAboveFloor - 8) / 4);
     }
@@ -415,7 +496,8 @@ uint16_t uglyPointsForScan(int16_t rssiAvgDbm, bool cadDetected, uint16_t packet
     return points;
 }
 
-void drawDitheredRect(int x, int y, int w, int h) {
+void drawDitheredRect(int x, int y, int w, int h)
+{
     if (w <= 0 || h <= 0) {
         return;
     }
@@ -433,7 +515,8 @@ void drawDitheredRect(int x, int y, int w, int h) {
     }
 }
 
-void drawScannerScreen() {
+void drawScannerScreen()
+{
     if (!displayOk) {
         return;
     }
@@ -445,6 +528,7 @@ void drawScannerScreen() {
     display.clearDisplay();
     display.setTextColor(SH110X_WHITE);
     display.setTextSize(1);
+
     display.setCursor(0, 0);
     display.print("fwSiteScanner");
     drawBatteryTopRight();
@@ -452,6 +536,7 @@ void drawScannerScreen() {
     display.setCursor(0, 10);
     if (scanComplete) {
         SlotStats best = slotStats[bestSlot];
+
         display.print(">Use CH ");
         printChannelNumber(bestSlot);
         display.print(" ");
@@ -471,12 +556,10 @@ void drawScannerScreen() {
     // history layer. Repeated CAD, packet, busy, or elevated RSSI results lift
     // this mass over time. It must be drawn before the white sample bars.
     for (uint8_t i = 0; i < scanSlotCount; i++) {
-        // Spread the channel columns across the whole graph width. Integer division
-        // with a fixed slotW left unused pixels on the right side, which made the
-        // last channel look like it was never being written.
         int x = graphX + ((int)i * graphW) / scanSlotCount;
         int nextX = graphX + ((int)(i + 1) * graphW) / scanSlotCount;
         int barW = nextX - x - 1;
+
         if (barW < 2) {
             barW = 2;
         }
@@ -495,37 +578,24 @@ void drawScannerScreen() {
         int x = graphX + ((int)i * graphW) / scanSlotCount;
         int nextX = graphX + ((int)(i + 1) * graphW) / scanSlotCount;
         int barW = nextX - x - 1;
+
         if (barW < 2) {
             barW = 2;
         }
 
         int centerX = x + (barW / 2);
-        int markerW = 3;
-        int markerX = centerX - 1;
+        int currentBarW = 3;
 
-        if (markerX < x) {
-            markerX = x;
-        }
-        if (markerX + markerW > x + barW) {
-            markerX = x + barW - markerW;
-        }
-        if (markerX < x) {
-            markerX = x;
-            markerW = barW;
+        if (barW < 3) {
+            currentBarW = barW;
         }
 
-        if (slotStats[i].samples == 0) {
-            display.drawFastVLine(centerX, baselineY - 2, 2, SH110X_WHITE);
-        } else {
-            int currentBarH = graphHeightFromValue(slotStats[i].rssiAvgDbm, graphH);
-            int currentY = graphY + graphH - currentBarH;
-            if (currentY < graphY) {
-                currentY = graphY;
-            }
-            if (currentY > baselineY - 1) {
-                currentY = baselineY - 1;
-            }
-            display.fillRect(markerX, currentY, markerW, baselineY - currentY, SH110X_WHITE);
+        int currentX = centerX - (currentBarW / 2);
+        int h = graphHeightFromValue(slotStats[i].rssiAvgDbm, graphH);
+        int y = graphY + graphH - h;
+
+        if (slotStats[i].samples > 0) {
+            display.fillRect(currentX, y, currentBarW, h, SH110X_WHITE);
         }
 
         // Activity dot stays near the top of the graph area. It is still useful
@@ -543,10 +613,18 @@ void drawScannerScreen() {
     int currentX = graphX + ((int)currentSlot * graphW) / scanSlotCount;
     int currentNextX = graphX + ((int)(currentSlot + 1) * graphW) / scanSlotCount;
     int currentBarW = currentNextX - currentX - 1;
+
     if (currentBarW < 2) {
         currentBarW = 2;
     }
-    display.drawLine(currentX, baselineY + 2, currentX + currentBarW - 1, baselineY + 2, SH110X_WHITE);
+
+    display.drawLine(
+        currentX,
+        baselineY + 2,
+        currentX + currentBarW - 1,
+        baselineY + 2,
+        SH110X_WHITE
+    );
 
     // Best slot marker: centered vertical line, drawn only after a terrain bin fills.
     // The scanner does not claim a recommendation while still collecting data.
@@ -561,7 +639,7 @@ void drawScannerScreen() {
     if (scanComplete) {
         display.print("Scan Complete!");
     } else {
-        display.print(freqMHz(fwChannelsHz[currentSlot]), 1);
+        display.print(fwIndexToMHz(currentSlot), 1);
         display.print(" ");
         display.print(current.rssiAvgDbm);
         display.print(" P");
@@ -576,9 +654,11 @@ void drawScannerScreen() {
 // -----------------------------------------------------------------------------
 // Radio callbacks
 // -----------------------------------------------------------------------------
-void onRxDone(uint8_t *payload, uint16_t size, int16_t rssi, int8_t snr) {
+void onRxDone(uint8_t *payload, uint16_t size, int16_t rssi, int8_t snr)
+{
     (void)payload;
     (void)size;
+
     slotPacketCount++;
     lastPacketRssi = rssi;
     lastPacketSnr = snr;
@@ -588,20 +668,24 @@ void onRxDone(uint8_t *payload, uint16_t size, int16_t rssi, int8_t snr) {
     }
 }
 
-void onRxTimeout() {
+void onRxTimeout()
+{
     if (scannerListening) {
         Radio.Rx(RX_TIMEOUT_VALUE);
     }
 }
 
-void onRxError() {
+void onRxError()
+{
     slotErrorCount++;
+
     if (scannerListening) {
         Radio.Rx(RX_TIMEOUT_VALUE);
     }
 }
 
-void onCadDone(bool channelActivityDetected) {
+void onCadDone(bool channelActivityDetected)
+{
     cadDetectedFlag = channelActivityDetected;
     cadDoneFlag = true;
 }
@@ -609,7 +693,8 @@ void onCadDone(bool channelActivityDetected) {
 // -----------------------------------------------------------------------------
 // Radio setup and scanning
 // -----------------------------------------------------------------------------
-void applyRxConfig() {
+void applyRxConfig()
+{
     Radio.SetRxConfig(
         MODEM_LORA,
         LORA_BANDWIDTH,
@@ -628,7 +713,8 @@ void applyRxConfig() {
     );
 }
 
-void radioBegin() {
+void radioBegin()
+{
     Serial.println("[RADIO] Hardware init");
     drawBootStatus("Radio init...");
 
@@ -644,26 +730,34 @@ void radioBegin() {
     radioEvents.CadDone = onCadDone;
 
     Radio.Init(&radioEvents);
-    Radio.SetChannel(fwChannelsHz[0]);
+    Radio.SetChannel(fwIndexToHz(0));
     applyRxConfig();
     Radio.Standby();
 
     radioOk = true;
 
     Serial.println("[RADIO] Configured for LoRa P2P slot scanning");
-    Serial.print("[RADIO] Slots: ");
+    Serial.print("[RADIO] Slots    : ");
     Serial.println(scanSlotCount);
-    Serial.print("[RADIO] SF: ");
-    Serial.print(LORA_SPREADING_FACTOR);
-    Serial.print(" BW index: ");
-    Serial.print(LORA_BANDWIDTH);
-    Serial.print(" CR index: ");
+    Serial.print("[RADIO] First CH  : ");
+    serialPrintChannelNumber(0);
+    Serial.print(" ");
+    Serial.print(fwIndexToMHz(0), 3);
+    Serial.println(" MHz");
+    Serial.print("[RADIO] SF       : ");
+    Serial.println(LORA_SPREADING_FACTOR);
+    Serial.print("[RADIO] BW Hz    : ");
+    Serial.println(fwDefaultBandwidthHz());
+    Serial.print("[RADIO] BW index : ");
+    Serial.println(LORA_BANDWIDTH);
+    Serial.print("[RADIO] CR index : ");
     Serial.println(LORA_CODINGRATE);
 
     drawBootStatus("Scanner ready");
 }
 
-bool runCad(uint32_t freqHz) {
+bool runCad(uint32_t freqHz)
+{
     cadDoneFlag = false;
     cadDetectedFlag = false;
 
@@ -673,27 +767,32 @@ bool runCad(uint32_t freqHz) {
 
     // SX126x CAD parameters. Numeric values keep this sketch independent of
     // enum names that may vary across SX126x-Arduino versions.
+    //
     // cadSymbolNum: 0x04 = 8 symbols
     // cadExitMode : 0x00 = CAD only
     Radio.SetCadParams(0x04, 22, 10, 0x00, 0);
     Radio.StartCad();
 
     uint32_t startMs = millis();
+
     while (!cadDoneFlag && millis() - startMs < cadWaitMs) {
         Radio.IrqProcess();
         delay(1);
     }
 
     Radio.Standby();
+
     return cadDoneFlag && cadDetectedFlag;
 }
 
-uint8_t hitPercent(uint32_t hits, uint32_t scans) {
+uint8_t hitPercent(uint32_t hits, uint32_t scans)
+{
     if (scans == 0) {
         return 0;
     }
 
     uint32_t pct = (hits * 100UL + (scans / 2UL)) / scans;
+
     if (pct > 100UL) {
         pct = 100UL;
     }
@@ -701,7 +800,9 @@ uint8_t hitPercent(uint32_t hits, uint32_t scans) {
     return (uint8_t)pct;
 }
 
-void updateLongScore(SlotStats &s) {
+void updateLongScore(uint8_t slot)
+{
+    SlotStats &s = slotStats[slot];
     if (s.longSamples == 0 || s.scans == 0) {
         s.rssiLongAvgDbm = rssiScaleMinDbm;
         s.longScore = 32767;
@@ -710,14 +811,23 @@ void updateLongScore(SlotStats &s) {
 
     s.rssiLongAvgDbm = (int16_t)(s.rssiLongSumDbm / (int32_t)s.longSamples);
 
-    int32_t cadPenalty = ((int32_t)cadPenaltyDb * (int32_t)s.cadHits + ((int32_t)s.scans / 2)) / (int32_t)s.scans;
-    int32_t packetPenalty = ((int32_t)packetPenaltyDb * (int32_t)s.packetScanHits + ((int32_t)s.scans / 2)) / (int32_t)s.scans;
-    int32_t busyPenalty = ((int32_t)busyPenaltyDb * (int32_t)s.busyHits + ((int32_t)s.scans / 2)) / (int32_t)s.scans;
+    int32_t cadPenalty =
+        ((int32_t)cadPenaltyDb * (int32_t)s.cadHits + ((int32_t)s.scans / 2)) /
+        (int32_t)s.scans;
+
+    int32_t packetPenalty =
+        ((int32_t)packetPenaltyDb * (int32_t)s.packetScanHits + ((int32_t)s.scans / 2)) /
+        (int32_t)s.scans;
+
+    int32_t busyPenalty =
+        ((int32_t)busyPenaltyDb * (int32_t)s.busyHits + ((int32_t)s.scans / 2)) /
+        (int32_t)s.scans;
 
     s.longScore = (int16_t)((int32_t)s.rssiLongAvgDbm + cadPenalty + packetPenalty + busyPenalty);
 }
 
-void findBestSlot() {
+void findBestSlot()
+{
     uint32_t bestUglyPoints = 0xFFFFFFFFUL;
     uint8_t chosen = bestSlot;
     bool found = false;
@@ -739,7 +849,8 @@ void findBestSlot() {
     }
 }
 
-void completeScanIfAnyBinFull() {
+void completeScanIfAnyBinFull()
+{
     if (scanComplete) {
         return;
     }
@@ -749,6 +860,7 @@ void completeScanIfAnyBinFull() {
     }
 
     findBestSlot();
+
     scanComplete = true;
     scannerListening = false;
     Radio.Standby();
@@ -759,7 +871,7 @@ void completeScanIfAnyBinFull() {
     Serial.print(" slot=");
     Serial.print(bestSlot);
     Serial.print(" freq=");
-    Serial.print(freqMHz(fwChannelsHz[bestSlot]), 3);
+    Serial.print(fwIndexToMHz(bestSlot), 3);
     Serial.print("MHz uglyPoints=");
     Serial.print(slotStats[bestSlot].uglyPoints);
     Serial.print(" longAvg=");
@@ -768,9 +880,11 @@ void completeScanIfAnyBinFull() {
     Serial.println(slotStats[bestSlot].longSamples);
 }
 
-void handleSerialCommands() {
+void handleSerialCommands()
+{
     while (Serial.available() > 0) {
         char c = Serial.read();
+
         if (c == 'r' || c == 'R') {
             resetStats();
             Serial.println("[SCANNER] Survey stats reset");
@@ -779,13 +893,16 @@ void handleSerialCommands() {
     }
 }
 
-void printSlotResult(uint8_t slot, bool cadDetected, bool busyDetected) {
+void printSlotResult(uint8_t slot, bool cadDetected, bool busyDetected)
+{
     SlotStats s = slotStats[slot];
 
     Serial.print("[SCAN] slot=");
     Serial.print(slot);
+    Serial.print(" ch=");
+    serialPrintChannelNumber(slot);
     Serial.print(" freq=");
-    Serial.print(freqMHz(fwChannelsHz[slot]), 3);
+    Serial.print(fwIndexToMHz(slot), 3);
     Serial.print("MHz rssiAvg=");
     Serial.print(s.rssiAvgDbm);
     Serial.print(" min=");
@@ -811,12 +928,14 @@ void printSlotResult(uint8_t slot, bool cadDetected, bool busyDetected) {
     Serial.print(" busyPct=");
     Serial.print(hitPercent(s.busyHits, s.scans));
     Serial.print(" best=");
+
     if (scanComplete) {
         Serial.print("CH");
         serialPrintChannelNumber(bestSlot);
     } else {
         Serial.print("pending");
     }
+
     Serial.println();
 
     Serial.print("[CSV] ");
@@ -828,7 +947,9 @@ void printSlotResult(uint8_t slot, bool cadDetected, bool busyDetected) {
     Serial.print(",");
     Serial.print(slot);
     Serial.print(",");
-    Serial.print(freqMHz(fwChannelsHz[slot]), 3);
+    Serial.print(fwIndexToChannel(slot));
+    Serial.print(",");
+    Serial.print(fwIndexToMHz(slot), 3);
     Serial.print(",");
     Serial.print(s.rssiAvgDbm);
     Serial.print(",");
@@ -858,25 +979,30 @@ void printSlotResult(uint8_t slot, bool cadDetected, bool busyDetected) {
     Serial.print(",");
     Serial.print(s.longScore);
     Serial.print(",");
+
     if (scanComplete) {
         Serial.print(fwIndexToChannel(bestSlot));
     } else {
         Serial.print(0);
     }
+
     Serial.print(",");
     Serial.print(bestSlot);
     Serial.print(",");
+
     if (scanComplete) {
-        Serial.print(freqMHz(fwChannelsHz[bestSlot]), 3);
+        Serial.print(fwIndexToMHz(bestSlot), 3);
     } else {
         Serial.print("0.000");
     }
+
     Serial.print(",");
     Serial.println(batteryVolts, 2);
 }
 
-void scanOneSlot(uint8_t slot) {
-    const uint32_t freqHz = fwChannelsHz[slot];
+void scanOneSlot(uint8_t slot)
+{
+    const uint32_t freqHz = fwIndexToHz(slot);
 
     slotPacketCount = 0;
     slotErrorCount = 0;
@@ -896,19 +1022,26 @@ void scanOneSlot(uint8_t slot) {
     Radio.RxBoosted(RX_TIMEOUT_VALUE);
 
     const uint32_t startMs = millis();
+
     while (millis() - startMs < rssiSampleWindowMs) {
         Radio.IrqProcess();
+
         int16_t rssi = Radio.Rssi(MODEM_LORA);
+
         if (rssi > -160 && rssi < 10) {
             rssiSum += rssi;
+
             if (rssi < rssiMin) {
                 rssiMin = rssi;
             }
+
             if (rssi > rssiMax) {
                 rssiMax = rssi;
             }
+
             rssiSamples++;
         }
+
         delay(rssiSampleDelayMs);
     }
 
@@ -919,6 +1052,7 @@ void scanOneSlot(uint8_t slot) {
     bool busyDetected = false;
 
     SlotStats &s = slotStats[slot];
+
     s.scans++;
     s.samples = rssiSamples;
     s.packets = slotPacketCount;
@@ -941,30 +1075,41 @@ void scanOneSlot(uint8_t slot) {
     if (cadDetected) {
         s.cadHits++;
     }
+
     if (slotPacketCount > 0) {
         s.packetScanHits++;
     }
+
     if (busyDetected) {
         s.busyHits++;
     }
 
-    s.uglyPoints += uglyPointsForScan(s.rssiAvgDbm, cadDetected, slotPacketCount, busyDetected);
+    s.uglyPoints += uglyPointsForScan(
+        s.rssiAvgDbm,
+        cadDetected,
+        slotPacketCount,
+        busyDetected
+    );
+
     if (s.uglyPoints >= terrainFullScalePoints) {
         s.uglyPoints = terrainFullScalePoints;
     }
 
     s.score = s.rssiAvgDbm;
+
     if (cadDetected) {
         s.score += cadPenaltyDb;
     }
+
     if (slotPacketCount > 0) {
         s.score += packetPenaltyDb;
     }
+
     if (busyDetected) {
         s.score += busyPenaltyDb;
     }
 
-    updateLongScore(s);
+    updateLongScore(slot);
 
     scanCount++;
     printSlotResult(slot, cadDetected, busyDetected);
@@ -974,28 +1119,32 @@ void scanOneSlot(uint8_t slot) {
 // -----------------------------------------------------------------------------
 // Arduino setup / loop
 // -----------------------------------------------------------------------------
-void setup() {
+void setup()
+{
 #ifdef LED_BUILTIN
     pinMode(LED_BUILTIN, OUTPUT);
     digitalWrite(LED_BUILTIN, LOW);
 #endif
 
     serialBegin();
+
     batteryBegin();
     updateBatteryVoltage(true);
+
     displayBegin();
     resetStats();
     radioBegin();
     printCsvHeader();
 
     Serial.println();
-    Serial.println("[SCANNER] Running. Narrow white RSSI bars draw over accumulated grey terrain; bottom tick marks current slot; best slot appears after a terrain bin fills.");
+    Serial.println("[SCANNER] Running. Narrow white RSSI bars draw over accumulated grey terrain; bottom tick marks current slot; best channel appears after a terrain bin fills.");
     Serial.println("[SCANNER] Scan ends when any grey terrain bin reaches full-scale. Power-cycle or press R in Serial Monitor to reset.");
     Serial.println("[SCANNER] Rotate the tool, move it around, and compare relative readings.");
     Serial.println();
 }
 
-void loop() {
+void loop()
+{
     updateBatteryVoltage(false);
     handleSerialCommands();
 
@@ -1023,6 +1172,7 @@ void loop() {
 #endif
 
     currentSlot++;
+
     if (currentSlot >= scanSlotCount) {
         currentSlot = 0;
         sweepCount++;

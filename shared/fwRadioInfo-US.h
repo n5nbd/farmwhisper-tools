@@ -97,43 +97,30 @@ static const FwLoRaProfile fwLoRaProfileDefault =
 // -----------------------------------------------------------------------------
 //
 // Centers are kept well inside the 902-928 MHz band edge for a 500 kHz signal.
-// Current spacing is 1 MHz. That gives simple user-facing channels and leaves
-// breathing room between adjacent FarmWhisper channels.
+// Current spacing is 1 MHz. That gives simple user-facing channels and preserves
+// the original compact FarmWhisper 13-channel survey range.
 //
-// CH 01 = 903.000 MHz
-// CH 09 = 911.000 MHz
-// CH 13 = 915.000 MHz default
-// CH 25 = 927.000 MHz
+// CH 01 = 905.500 MHz
+// CH 09 = 913.500 MHz default
+// CH 13 = 917.500 MHz
 
-static const uint8_t fwDefaultChannel = 13;
+static const uint8_t fwDefaultChannel = 9;
 
 static const uint32_t fwChannelFrequenciesHz[] =
 {
-  903000000UL,
-  904000000UL,
-  905000000UL,
-  906000000UL,
-  907000000UL,
-  908000000UL,
-  909000000UL,
-  910000000UL,
-  911000000UL,
-  912000000UL,
-  913000000UL,
-  914000000UL,
-  915000000UL,
-  916000000UL,
-  917000000UL,
-  918000000UL,
-  919000000UL,
-  920000000UL,
-  921000000UL,
-  922000000UL,
-  923000000UL,
-  924000000UL,
-  925000000UL,
-  926000000UL,
-  927000000UL
+  905500000UL,
+  906500000UL,
+  907500000UL,
+  908500000UL,
+  909500000UL,
+  910500000UL,
+  911500000UL,
+  912500000UL,
+  913500000UL,
+  914500000UL,
+  915500000UL,
+  916500000UL,
+  917500000UL
 };
 
 static const uint8_t fwChannelCount =
