@@ -1,5 +1,25 @@
 /*
   FarmWhisper Beacon Tool
+  Version: 0.1.1
+
+  Target hardware:
+  - RAK4631 Core
+  - RAK19003 or RAK5005 base
+
+  Radio:
+  - SX1262 LoRa P2P beacon transmitter
+  - Uses shared/fwRadioInfo-US.h for channel list and LoRa profile
+
+  Purpose:
+  Simple FarmWhisper diagnostic beacon. This tool transmits periodic beacon
+  packets on one selected FarmWhisper channel.
+
+  Top-of-script knob:
+  - beaconChannel selects the FarmWhisper user-facing channel.
+*/
+
+/*
+  FarmWhisper Beacon Tool
   File: fwBeaconTool.ino
 
   Board:
@@ -25,6 +45,61 @@
 #include <SPI.h>
 #include <string.h>
 #include <SX126x-RAK4630.h>
+
+
+
+#include "fwRadioInfo-US.h"
+
+static const char fwBeaconToolVersion[] = "0.1.1";
+
+// -----------------------------------------------------------------------------
+// FarmWhisper beacon radio selection
+// -----------------------------------------------------------------------------
+//
+// Change this one value to rebuild the beacon for a different FarmWhisper
+// user-facing channel. Valid US channels are defined in shared/fwRadioInfo-US.h.
+//
+// Default is fwDefaultChannel from the shared radio plan.
+//
+static const uint8_t beaconChannel = fwDefaultChannel;
+
+// SX126x-Arduino bandwidth index:
+//   0 = 125 kHz
+//   1 = 250 kHz
+//   2 = 500 kHz
+//
+// shared/fwRadioInfo-US.h stores bandwidth in Hz. This maps it to the
+// SX126x-Arduino API value.
+static uint8_t fwSx126xBandwidthIndex()
+{
+  if (fwDefaultBandwidthHz() >= 500000UL)
+  {
+    return 2;
+  }
+
+  if (fwDefaultBandwidthHz() >= 250000UL)
+  {
+    return 1;
+  }
+
+  return 0;
+}
+
+static uint8_t activeBeaconChannel()
+{
+  return fwSafeChannel(beaconChannel);
+}
+
+static uint32_t activeBeaconFrequencyHz()
+{
+  return fwChannelToHz(activeBeaconChannel());
+}
+
+static float activeBeaconFrequencyMHz()
+{
+  return fwChannelToMHz(activeBeaconChannel());
+}
+
 
 // -----------------------------------------------------------------------------
 // FarmWhisper radio settings
@@ -98,6 +173,16 @@ static const uint32_t batteryPin = WB_A0;
 static const float batteryMvPerLsb = 0.73242188F;
 static const float batteryDividerCompensation = 1.73F;
 static const float batteryRealMvPerLsb = batteryMvPerLsb * batteryDividerCompensation;
+
+// -----------------------------------------------------------------------------
+// Beacon shared radio compatibility constants
+// -----------------------------------------------------------------------------
+#define RF_FREQUENCY activeBeaconFrequencyHz()
+#define LORA_BANDWIDTH fwSx126xBandwidthIndex()
+#define LORA_SPREADING_FACTOR fwDefaultSpreadingFactor()
+#define LORA_CODINGRATE fwDefaultCodingRate()
+#define LORA_PREAMBLE_LENGTH fwDefaultPreambleLength()
+#define TX_OUTPUT_POWER fwDefaultTxPowerDbm()
 
 // -----------------------------------------------------------------------------
 // Radio event state
