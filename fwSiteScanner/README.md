@@ -39,8 +39,8 @@ Use the same RAK4631 board setup already used for the working FarmWhisper monito
   - Busy-RSSI readings raise it.
 - The bottom tick marks the slot being scanned right now.
 - The single vertical line marks the current long-term best slot.
-- `Best` still shows the actual recommended frequency, long-term RSSI average, and sample count.
-- `Now` shows the slot being scanned right now, the latest RSSI sample, the long sample count for that slot, and a simple accumulated activity percentage.
+- `>>>` shows the actual recommended frequency, long-term RSSI average, and sample count.
+- The bottom text shows the slot being scanned right now, the latest RSSI sample, the long sample count for that slot, and a simple accumulated activity percentage.
 - Shoot for the valleys. A low grey/stippled valley is usually a better FarmWhisper candidate than a tall grey hill.
 - This is for choosing a relatively quiet FarmWhisper channel, not for FCC-grade measurement.
 
@@ -107,3 +107,12 @@ so the RF dirt map can be seen growing behind the current readings.
 ## 0.1.7 note
 
 The current RSSI display is now a narrow centered vertical white bar inside each frequency band, leaving the cumulative stippled terrain visible on both sides.
+
+## 0.1.8 notes
+Added delay so the startup screens are readable.
+Display version number
+Cleaned up line #2, Recommended Frequency and Average RSSI for that frequency.
+Cleaned up last line, Current Frequency RSSI P(# of packet decodes on this frequency) #(Sweep number)
+Moved the graph up a few lines so the bottom text wasn't so crowded.'
+
+

@@ -95,7 +95,6 @@ uint32_t lastBatteryReadMs = 0;
 #define LORA_IQ_INVERSION_ON false
 #define RX_TIMEOUT_VALUE 0
 
-// First-pass FarmWhisper survey slots.
 // Kept to 902-923 MHz for a conservative RAK4631(H) first test.
 // Add/remove slots later once we decide what the production channel plan is.
 static const uint32_t scanFrequenciesHz[] = {
@@ -317,14 +316,14 @@ void displayBegin() {
   display.setTextColor(SH110X_WHITE);
   display.setTextSize(1);
   display.setCursor(0, 0);
-  display.println("FarmWhisper");
+  display.println("fwSiteScanner");
   drawBatteryTopRight();
   display.setCursor(0, 10);
-  display.println("Site Scanner");
+  display.println("v0.1.8");
   display.println();
   display.println("OLED OK");
-  display.println("Waiting radio...");
   display.display();
+  delay(3000);
 
   Serial.println("[OLED] SH1106G initialized on Wire @ 0x3C");
 }
@@ -338,7 +337,7 @@ void drawBootStatus(const char *line) {
   display.setTextColor(SH110X_WHITE);
   display.setTextSize(1);
   display.setCursor(0, 0);
-  display.println("FW SITE SCAN");
+  display.println("fwSiteScanner");
   drawBatteryTopRight();
   display.setCursor(0, 12);
   display.println(line);
@@ -349,6 +348,7 @@ void drawBootStatus(const char *line) {
   display.print(LORA_SPREADING_FACTOR);
   display.println(" BW125");
   display.display();
+  delay(3000);
 }
 
 int graphHeightFromValue(int16_t value, int graphH) {
@@ -429,19 +429,19 @@ void drawScannerScreen() {
   display.setTextSize(1);
 
   display.setCursor(0, 0);
-  display.print("FW SITE");
+  display.print("fwSiteScanner");
   drawBatteryTopRight();
 
   display.setCursor(0, 10);
-  display.print("Best ");
+  display.print(">Use ");
   display.print(freqMHz(scanFrequenciesHz[bestSlot]), 1);
-  display.print(" L");
+  display.print(" MHz ");
   display.print(best.rssiLongAvgDbm);
-  display.print(" S");
-  display.print(best.longSamples);
+  display.print("db");
+  //display.print(best.longSamples);
 
   const int graphX = 0;
-  const int graphY = 23;
+  const int graphY = 20;
   const int graphW = 128;
   const int graphH = 29;
   const int slotW = graphW / scanSlotCount;
@@ -542,9 +542,9 @@ void drawScannerScreen() {
   display.print(freqMHz(scanFrequenciesHz[currentSlot]), 1);
   display.print(" ");
   display.print(current.rssiAvgDbm);
-  display.print(" H");
+  display.print(" P");
   display.print(current.cadHits + current.packetScanHits);
-  display.print(" S");
+  display.print(" #");
   display.print(current.longSamples);
 
   display.display();
