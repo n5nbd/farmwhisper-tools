@@ -1,6 +1,6 @@
  /*
   FarmWhisper Site Scanner
-  Version: 0.1.9-scan-complete
+  Version: 0.1.10-scan-complete
 
   Target hardware:
     - RAK4631 Core
@@ -99,19 +99,19 @@ uint32_t lastBatteryReadMs = 0;
 // Kept to 902-923 MHz for a conservative RAK4631(H) first test.
 // Add/remove slots later once we decide what the production channel plan is.
 static const uint32_t scanFrequenciesHz[] = {
-  902000000UL,
-  904000000UL,
-  906000000UL,
-  908000000UL,
-  910000000UL,
-  912000000UL,
-  914000000UL,
-  915000000UL,
-  916000000UL,
-  918000000UL,
-  920000000UL,
-  922000000UL,
-  923000000UL
+  905500000UL,
+  906500000UL,
+  907500000UL,
+  908500000UL,
+  909500000UL,
+  910500000UL,
+  911500000UL,
+  912500000UL,
+  913500000UL,
+  914500000UL,
+  915500000UL,
+  916500000UL,
+  917500000UL
 };
 
 static const uint8_t scanSlotCount = sizeof(scanFrequenciesHz) / sizeof(scanFrequenciesHz[0]);
@@ -206,7 +206,7 @@ void serialBegin() {
   Serial.println();
   Serial.println("========================================");
   Serial.println(" FarmWhisper Site Scanner");
-  Serial.println(" Version: 0.1.9-scan-complete");
+  Serial.println(" Version: 0.1.10-scan-complete");
   Serial.println(" Board : RAK4631 / RAK19003");
   Serial.println(" Radio : SX1262 LoRa slot scanner");
   Serial.println(" OLED  : SH1106G on Wire @ 0x3C");
@@ -321,7 +321,7 @@ void displayBegin() {
   display.println("fwSiteScanner");
   drawBatteryTopRight();
   display.setCursor(0, 10);
-  display.println("v0.1.9");
+  display.println("v0.1.10");
   display.println();
   display.println("OLED OK");
   display.display();

@@ -121,3 +121,22 @@ Scan Complete!
 
 Send `R` in Serial Monitor, reset, or power-cycle the tool to clear the survey
 and start scanning again.
+
+## 0.1.10 upate
+
+Changed frequencies to use FarmWhisper's standardized channel list. 
+
+CH01 905.5 MHz
+CH02 906.5 MHz
+CH03 907.5 MHz
+CH04 908.5 MHz
+CH05 909.5 MHz
+CH06 910.5 MHz
+CH07 911.5 MHz
+CH08 912.5 MHz
+CH09 913.5 MHz
+CH10 914.5 MHz
+CH11 915.5 MHz
+CH12 916.5 MHz
+CH13 917.5 MHz
+
