@@ -56,13 +56,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SH110X.h>
 
-#if __has_include("fwRadioInfo-US.h")
-#include "fwRadioInfo-US.h"
-#elif __has_include("../shared/fwRadioInfo-US.h")
-#include "../shared/fwRadioInfo-US.h"
-#else
-#error "fwRadioInfo-US.h not found. Put it in shared/ and add shared to compiler include path."
-#endif
+#include <fwRadioInfo-US.h>
 
 // -----------------------------------------------------------------------------
 // Display configuration
@@ -157,7 +151,7 @@ static const uint32_t terrainFullScalePoints = 240;
 // Simple scoring. Lower score is better.
 // RSSI already trends lower when the slot is quiet.
 static const int16_t cadPenaltyDb = 18;
-static const int16_t packetPenaltyDb = 10;
+static const int16_t packetPenaltyDb = 30;
 static const int16_t busyPenaltyDb = 8;
 
 static RadioEvents_t radioEvents;
@@ -470,27 +464,54 @@ uint16_t uglyPointsForScan(
     uint16_t packetCount,
     bool busyDetected)
 {
-    uint16_t points = 0;
+    uint16_t points = 1;
 
     // RSSI contributes only when it is meaningfully above the quiet floor.
-    // This prevents every normal quiet scan from immediately painting the
-    // whole display grey, while still letting noisier slots slowly rise.
+    // This is weak evidence because it may be plain RF noise or nearby hash.
     int16_t rssiAboveFloor = rssiAvgDbm - rssiScaleMinDbm;
 
     if (rssiAboveFloor > 8) {
         points += (uint16_t)((rssiAboveFloor - 8) / 4);
     }
 
+    // CAD is LoRa-shaped activity, stronger evidence than raw RSSI.
     if (cadDetected) {
-        points += 8;
+        points += 6;
     }
 
+    // A clean packet decode is a jackpot event. It should be visibly obvious
+    // on the terrain even if it only happens once during a sweep. Use a fraction
+    // of full-scale terrain so one confirmed packet produces a clear bar jump
+    // without immediately ending the scan.
     if (packetCount > 0) {
-        points += 12;
+      /*
+      Packet decode terrain weight:
+        terrainFullScalePoints / 5 = 20%
+        terrainFullScalePoints / 4 = 25%
+        terrainFullScalePoints / 3 = 33%
+        terrainFullScalePoints / 2 = 50%
+      */
+        uint16_t packetPoints = (uint16_t)(terrainFullScalePoints / 3);
+
+        if (packetPoints < 25) {
+            packetPoints = 25;
+        }
+
+        if (packetCount > 1) {
+            packetPoints += (uint16_t)((packetCount - 1) * (terrainFullScalePoints / 10));
+        }
+
+        if (packetPoints > (terrainFullScalePoints / 2)) {
+            packetPoints = (uint16_t)(terrainFullScalePoints / 2);
+        }
+
+        points += packetPoints;
     }
 
+    // Busy RSSI is stronger than elevated average noise, but weaker than
+    // LoRa CAD or a successful packet decode.
     if (busyDetected) {
-        points += 10;
+        points += 4;
     }
 
     return points;
